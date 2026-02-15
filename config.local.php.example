@@ -1,0 +1,26 @@
+<?php
+return [
+    'db' => [
+        'host' => 'db',
+        'name' => 'semantica',
+        'user' => 'semantica_user',
+        'pass' => 'semantica_pass',
+        'charset' => 'utf8mb4',
+    ],
+    'serper' => [
+        'api_key' => 'YOUR_SERPER_API_KEY',
+    ],
+    'openai' => [
+        'api_key' => 'YOUR_OPENAI_API_KEY',
+        'model' => 'gpt-4.1',
+        'timeout' => 30,
+    ],
+    'rate_limit' => [
+        'daily_limit' => 10,
+        'interval_hours' => 24,
+    ],
+    'scrape' => [
+        'max_length' => 3000,
+        'timeout' => 10,
+    ],
+];

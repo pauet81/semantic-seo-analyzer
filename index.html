@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Semantico SEO</title>
+  <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+  <div class="bg-orb bg-orb--one"></div>
+  <div class="bg-orb bg-orb--two"></div>
+
+  <main class="app-shell">
+    <header class="hero">
+      <div class="brand">
+        <span class="badge">Semantico</span>
+        <h1>Analizador semantico SEO con IA</h1>
+      </div>
+      <p class="lead">Introduce hasta tres palabras clave y recibe un informe que combina analisis TF-IDF con recomendaciones estrategicas para posicionar contenido.</p>
+      <form id="keywordForm" class="keyword-form">
+        <label for="keywords">Palabras clave (maximo 3, separadas por comas)</label>
+        <div class="field-group">
+          <input type="text" id="keywords" name="keywords" placeholder="seo local, posicionamiento google" required>
+          <button type="submit">Analizar</button>
+        </div>
+        <p class="keyword-count" id="keywordCount">0/3 keywords detectadas</p>
+        <div class="field-group">
+          <button type="button" id="resetCache" class="button-secondary">Resetear cache</button>
+        </div>
+        <p class="form-hint">Cache 30 dias.</p>
+      </form>
+    </header>
+
+    <details class="card" id="recentReports" open>
+      <summary>Ultimos informes generados</summary>
+      <div id="recentReportsContent">
+        <p>Cargando...</p>
+      </div>
+    </details>
+
+    <section id="results" class="results" aria-live="polite">
+      <div id="resultsPlaceholder" class="results-placeholder">
+        <p>Introduce las palabras clave y haz clic en "Analizar" para ver el informe.</p>
+      </div>
+      <div id="resultsContent" class="results-grid"></div>
+    </section>
+  </main>
+
+  <div id="spinnerOverlay" class="spinner-overlay hidden">
+    <div class="spinner-card">
+      <div class="spinner"></div>
+      <p>Analizando resultados... esto puede tardar 30-60 segundos.</p>
+    </div>
+  </div>
+
+  <script src="js/app.js" defer></script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+{
+  "name": "semantic-seo-analyzer",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "app",
+  "workspaceFolder": "/workspaces/semantica",
+  "forwardPorts": [8080, 3306],
+  "postCreateCommand": "php -v",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "xdebug.php-pack"
+      ]
+    }
+  }
+}
