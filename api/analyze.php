@@ -296,9 +296,8 @@ function call_openai(array $config, string $prompt): array {
     $payload = [
         'model' => $config['openai']['model'],
         'temperature' => 0.2,
-        'response_format' => ['type' => 'json_object'],
         'messages' => [
-            ['role' => 'system', 'content' => 'Eres un experto SEO que responde solo con JSON valido.'],
+            ['role' => 'system', 'content' => 'Eres un experto SEO que responde solo con JSON valido, sin explicaciones adicionales, sin markdown, sin bloques de código.'],
             ['role' => 'user', 'content' => $prompt]
         ]
     ];
@@ -316,19 +315,38 @@ function call_openai(array $config, string $prompt): array {
     ]);
     $response = curl_exec($ch);
     $error = curl_error($ch);
+    $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
 
     if ($response === false) {
-        return ['error' => $error ?: 'OpenAI request failed'];
+        error_log('OpenAI curl error: ' . $error);
+        return ['error' => 'OpenAI connection failed: ' . ($error ?: 'unknown')];
     }
+    
+    if ($httpCode >= 400) {
+        error_log('OpenAI HTTP ' . $httpCode . ': ' . substr($response, 0, 500));
+        return ['error' => 'OpenAI error (HTTP ' . $httpCode . ')'];
+    }
+    
     $data = safe_json_decode($response);
     if (!isset($data['choices'][0]['message']['content'])) {
-        return ['error' => 'OpenAI response missing content', 'raw' => $data];
+        error_log('OpenAI missing content: ' . json_encode($data));
+        return ['error' => 'OpenAI response invalid'];
     }
     $content = $data['choices'][0]['message']['content'];
+    
+    // Strip markdown code blocks if present
+    $content = preg_replace('/^```json\s*/i', '', $content);
+    $content = preg_replace('/^```\s*/i', '', $content);
+    $content = preg_replace('/\s*```\s*$/i', '', $content);
+    $content = trim($content);
+    
+    error_log('OpenAI response (first 200 chars): ' . substr($content, 0, 200));
+    
     $analysis = safe_json_decode($content);
     if (!$analysis) {
-        return ['error' => 'OpenAI returned invalid JSON', 'raw' => $content];
+        error_log('OpenAI invalid JSON. Raw content (first 500 chars): ' . substr($content, 0, 500));
+        return ['error' => 'OpenAI returned invalid JSON'];
     }
     return ['analysis' => $analysis, 'usage' => $data['usage'] ?? null];
 }
@@ -336,9 +354,9 @@ function call_openai(array $config, string $prompt): array {
 function call_anthropic(array $config, string $prompt): array {
     $payload = [
         'model' => $config['anthropic']['model'],
-        'max_tokens' => $config['anthropic']['max_tokens'] ?? 2048,
+        'max_tokens' => $config['anthropic']['max_tokens'] ?? 4096,
         'temperature' => 0.2,
-        'system' => 'Eres un experto SEO que responde solo con JSON valido.',
+        'system' => 'Eres un experto SEO que responde solo con JSON valido, sin explicaciones adicionales, sin markdown, sin bloques de código.',
         'messages' => [
             ['role' => 'user', 'content' => $prompt]
         ]
@@ -354,23 +372,42 @@ function call_anthropic(array $config, string $prompt): array {
             'anthropic-version: 2023-06-01'
         ],
         CURLOPT_POSTFIELDS => json_encode($payload),
-        CURLOPT_TIMEOUT => $config['anthropic']['timeout'] ?? 30,
+        CURLOPT_TIMEOUT => $config['anthropic']['timeout'] ?? 60,
     ]);
     $response = curl_exec($ch);
     $error = curl_error($ch);
+    $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
     curl_close($ch);
 
     if ($response === false) {
-        return ['error' => $error ?: 'Anthropic request failed'];
+        error_log('Anthropic curl error: ' . $error);
+        return ['error' => 'Anthropic connection failed: ' . ($error ?: 'unknown')];
     }
+    
+    if ($httpCode >= 400) {
+        error_log('Anthropic HTTP ' . $httpCode . ': ' . substr($response, 0, 500));
+        return ['error' => 'Anthropic error (HTTP ' . $httpCode . ')'];
+    }
+    
     $data = safe_json_decode($response);
     if (!isset($data['content'][0]['text'])) {
-        return ['error' => 'Anthropic response missing content', 'raw' => $data];
+        error_log('Anthropic missing content: ' . json_encode($data));
+        return ['error' => 'Anthropic response invalid'];
     }
     $content = $data['content'][0]['text'];
+    
+    // Strip markdown code blocks if present
+    $content = preg_replace('/^```json\s*/i', '', $content);
+    $content = preg_replace('/^```\s*/i', '', $content);
+    $content = preg_replace('/\s*```\s*$/i', '', $content);
+    $content = trim($content);
+    
+    error_log('Anthropic response (first 200 chars): ' . substr($content, 0, 200));
+    
     $analysis = safe_json_decode($content);
     if (!$analysis) {
-        return ['error' => 'Anthropic returned invalid JSON', 'raw' => $content];
+        error_log('Anthropic invalid JSON. Raw content (first 500 chars): ' . substr($content, 0, 500));
+        return ['error' => 'Anthropic returned invalid JSON'];
     }
     $usage = $data['usage'] ?? null;
     if (is_array($usage)) {
@@ -613,9 +650,16 @@ $stats = [
 $tfidf['stats'] = $stats;
 
 $prompt = build_prompt($keywords, $documents, $tfidf, $serpResults, $stats);
-$provider = $config['llm']['provider'] ?? 'openai';
-if ($provider === 'anthropic') {
+$analyzerProvider = $config['llm']['analyzer_provider'] ?? 'openai';
+
+// Intentar con el proveedor preferido, fallback a OpenAI si falla
+if ($analyzerProvider === 'anthropic') {
     $ai = call_anthropic($config, $prompt);
+    if (!empty($ai['error'])) {
+        error_log('Anthropic failed, falling back to OpenAI: ' . $ai['error']);
+        $analyzerProvider = 'openai';
+        $ai = call_openai($config, $prompt);
+    }
 } else {
     $ai = call_openai($config, $prompt);
 }
@@ -666,9 +710,10 @@ foreach ($documents as $doc) {
 }
 
 $serpapiCostPerSearch = 0.025; // USD, approx based on 1000 searches / $25 plan.
-$openaiBlendedPer1M = 1.84; // USD per 1M tokens (blended) for gpt-4.1.
-$openaiCost = ($provider === 'openai') ? ($usageTokens / 1000000) * $openaiBlendedPer1M : 0;
-$serpapiCost = $serpApiCalls * $serpapiCostPerSearch;
+$claudeCostPer1M = 3.00; // USD per 1M tokens input (approx)
+$openaiBlendedPer1M = 1.84; // USD per 1M tokens (blended) for gpt-4.
+$costPer1M = ($analyzerProvider === 'anthropic') ? $claudeCostPer1M : $openaiBlendedPer1M;
+$aiCost = ($usageTokens / 1000000) * $costPer1M;
 
 json_response([
     'cached' => false,
@@ -679,16 +724,16 @@ json_response([
     'stats' => $stats,
     'fallback_mode' => $fallbackMode,
     'usage' => [
-        'llm_provider' => $provider,
+        'llm_provider' => $analyzerProvider,
         'serpapi_calls' => $serpApiCalls,
         'openai_tokens' => $usageTokens,
         'urls_total' => count($urls),
         'scraped_ok' => $scrapedOk,
         'serp_snippets_used' => $serpSnippets,
         'serpapi_cost_usd' => round($serpapiCost, 4),
-        'openai_cost_usd' => round($openaiCost, 4),
+        'openai_cost_usd' => round($aiCost, 4),
         'serpapi_rate_usd' => $serpapiCostPerSearch,
-        'openai_rate_usd_per_1m' => $openaiBlendedPer1M,
+        'openai_rate_usd_per_1m' => $costPer1M,
         'pricing_note' => 'Costes aproximados segun tarifas publicas'
     ],
     'documents' => array_map(function ($doc) {

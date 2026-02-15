@@ -262,7 +262,7 @@ const renderResults = (payload) => {
   resultsContent.appendChild(createCard('5. Estructura propuesta', '', renderEstructura(analysis)));
   resultsContent.appendChild(createCard('6. Oportunidades', '', renderOportunidades(analysis)));
   resultsContent.appendChild(createCard('7. Fuentes analizadas', '', renderSources(payload), false));
-  resultsContent.appendChild(createCard('8. Contenido generado', '', renderContentGenerator(), false));
+  resultsContent.appendChild(createCard('8. Contenido generado', '', renderContentGenerator(), true));
   resultsContent.appendChild(createCard('9. Consumo APIs', '', renderUsage(payload), false));
 
   contentInput = resultsContent.querySelector('[data-content="input"]');

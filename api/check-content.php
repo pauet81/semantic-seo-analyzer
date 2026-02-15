@@ -29,6 +29,107 @@ function extract_plain_text(string $html): string {
     return trim($text);
 }
 
+function count_syllables(string $word): int {
+    $word = mb_strtolower($word, 'UTF-8');
+    if (mb_strlen($word) < 2) return 1;
+    
+    // Diptongos y triptongos en español
+    $diptongos = ['ai', 'ei', 'oi', 'au', 'eu', 'ou', 'ia', 'ie', 'io', 'ua', 'ue', 'uo'];
+    
+    $syllables = 0;
+    $previous_was_vowel = false;
+    
+    for ($i = 0; $i < mb_strlen($word); $i++) {
+        $char = mb_substr($word, $i, 1);
+        $is_vowel = in_array($char, ['a', 'e', 'i', 'o', 'u']);
+        
+        if ($is_vowel && !$previous_was_vowel) {
+            // Revisar si es diptongo
+            $next_chars = mb_substr($word, $i, 2);
+            if (!in_array($next_chars, $diptongos)) {
+                $syllables++;
+            }
+        }
+        
+        $previous_was_vowel = $is_vowel;
+    }
+    
+    return max(1, $syllables);
+}
+
+function count_total_syllables(string $text): int {
+    $words = preg_split('/\s+/u', $text, -1, PREG_SPLIT_NO_EMPTY);
+    $total = 0;
+    foreach ($words as $word) {
+        $word = preg_replace('/[^a-záéíóúñ]/ui', '', $word);
+        if (!empty($word)) {
+            $total += count_syllables($word);
+        }
+    }
+    return max(1, $total);
+}
+
+function calculate_flesch_readability(string $text): array {
+    $text = trim($text);
+    if (empty($text)) {
+        return ['score' => 0, 'level' => 'Desconocido', 'description' => 'Texto vacio'];
+    }
+    
+    // Contar palabras
+    $words = preg_split('/\s+/u', $text, -1, PREG_SPLIT_NO_EMPTY);
+    $word_count = count($words);
+    
+    if ($word_count === 0) {
+        return ['score' => 0, 'level' => 'Desconocido', 'description' => 'Sin palabras'];
+    }
+    
+    // Contar oraciones (., !, ?)
+    $sentence_count = preg_match_all('/[.!?]+/u', $text);
+    if ($sentence_count === 0) $sentence_count = 1;
+    
+    // Contar sílabas
+    $syllable_count = count_total_syllables($text);
+    
+    // Fórmula Flesch Reading Ease (adaptada para español)
+    $flesch_score = 206.835 - (1.015 * ($word_count / $sentence_count)) - (84.6 * ($syllable_count / $word_count));
+    $flesch_score = max(0, min(100, $flesch_score));
+    
+    // Determinar nivel
+    if ($flesch_score >= 90) {
+        $level = 'Muy fácil';
+        $description = 'Niños 5-6 años, muy legible';
+    } elseif ($flesch_score >= 80) {
+        $level = 'Fácil';
+        $description = 'Niños 6-7 años';
+    } elseif ($flesch_score >= 70) {
+        $level = 'Bastante fácil';
+        $description = 'Primaria alta';
+    } elseif ($flesch_score >= 60) {
+        $level = 'Estándar';
+        $description = 'Óptimo para SEO, público general';
+    } elseif ($flesch_score >= 50) {
+        $level = 'Bastante difícil';
+        $description = 'Secundaria, especializados';
+    } elseif ($flesch_score >= 30) {
+        $level = 'Difícil';
+        $description = 'Universitario, técnico';
+    } else {
+        $level = 'Muy difícil';
+        $description = 'Expertos, académico';
+    }
+    
+    return [
+        'score' => round($flesch_score, 1),
+        'level' => $level,
+        'description' => $description,
+        'metrics' => [
+            'words' => $word_count,
+            'sentences' => $sentence_count,
+            'syllables' => $syllable_count
+        ]
+    ];
+}
+
 function parse_density_range(string $range): array {
     $range = str_replace('%', '', $range);
     $parts = array_map('trim', explode('-', $range));
@@ -92,9 +193,10 @@ if (!is_array($analysis)) {
     json_response(['error' => 'Informe invalido.'], 500);
 }
 
-$text = extract_plain_text($html);
-$tokens = sem_tokenize($text, sem_stopwords_es());
-$wordCount = count($tokens);
+$plain = extract_plain_text($html);
+$normalized = sem_normalize_text($plain);
+$tokensAll = preg_split('/\s+/u', $normalized, -1, PREG_SPLIT_NO_EMPTY);
+$wordCount = count($tokensAll);
 
 $length = $analysis['longitud_texto'] ?? [];
 $range = $length['rango_recomendado'] ?? '';
@@ -119,8 +221,9 @@ foreach (($analysis['keywords_semanticas'] ?? []) as $item) {
     if ($term === '' || $wordCount === 0) {
         continue;
     }
-    $termTokens = sem_tokenize($term, []);
-    $occ = count_phrase_occurrences($tokens, $termTokens);
+    $termNormalized = sem_normalize_text($term);
+    $termTokens = preg_split('/\s+/u', $termNormalized, -1, PREG_SPLIT_NO_EMPTY);
+    $occ = count_phrase_occurrences($tokensAll, $termTokens);
     $density = ($wordCount > 0) ? ($occ / $wordCount) * 100 : 0;
     [$minD, $maxD] = parse_density_range($densityRange);
     $ok = ($minD === 0.0 && $maxD === 0.0) ? false : ($density >= $minD && $density <= $maxD);
@@ -145,6 +248,9 @@ $avgTermScore = $termScores ? array_sum($termScores) / count($termScores) : 0.0;
 $score = (0.6 * $avgTermScore + 0.4 * $lengthScore) * 100;
 $score = max(0, min(100, $score));
 
+// Calculate readability (Flesch)
+$readability = calculate_flesch_readability($plain);
+
 $insights = [];
 if ($wordCount < $minRequired) {
     $insights[] = 'El contenido es corto: ' . $wordCount . ' palabras (minimo ' . $minRequired . ').';
@@ -154,14 +260,20 @@ foreach ($termStats as $stat) {
         $insights[] = 'Ajusta la densidad de "' . $stat['term'] . '" a ' . $stat['target'] . ' (actual ' . $stat['density'] . '%).';
     }
 }
+if ($readability['score'] < 60) {
+    $insights[] = 'Legibilidad baja (' . $readability['score'] . ' Flesch). Simplifica oraciones y usa vocabulario más común.';
+} elseif ($readability['score'] > 85) {
+    $insights[] = 'Legibilidad muy alta (' . $readability['score'] . ' Flesch). Considera agregar más profundidad técnica si es necesario.';
+}
 if (!$insights) {
-    $insights[] = 'El contenido cumple longitud y densidades clave.';
+    $insights[] = 'El contenido cumple longitud, densidades y legibilidad.';
 }
 
 json_response([
     'score' => (int) round($score),
     'word_count' => $wordCount,
     'min_required' => $minRequired,
+    'readability' => $readability,
     'term_stats' => $termStats,
     'insights' => $insights
 ]);

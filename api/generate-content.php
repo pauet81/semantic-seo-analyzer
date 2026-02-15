@@ -31,9 +31,9 @@ set_error_handler(function (int $severity, string $message, string $file, int $l
 function call_openai_html(array $config, string $prompt): array {
     $payload = [
         'model' => $config['openai']['model'],
-        'temperature' => 0.2,
+        'temperature' => 0.3,
         'messages' => [
-            ['role' => 'system', 'content' => 'Eres un redactor SEO. Devuelves solo HTML valido, sin explicaciones.'],
+            ['role' => 'system', 'content' => 'Eres un redactor SEO experto especialista en generar contenido largo, detallado y completamente optimizado para SEO. Tu UNICA tarea es seguir instrucciones al pie de la letra. Tu contenido DEBE cumplir exactamente: longitud total (>=1000 palabras), densidades de keywords, estructura H1/H2/H3, formato con negritas en keywords. Devuelves SOLO HTML valido, bien formateado, con todos los tags cerrados correctamente. NO incluyas explicaciones, markdown, o bloques de código. SIEMPRE asegura que el HTML tenga la longitud requerida.'],
             ['role' => 'user', 'content' => $prompt]
         ]
     ];
@@ -56,20 +56,44 @@ function call_openai_html(array $config, string $prompt): array {
 
     if ($response === false) {
         error_log('OpenAI generate failed: ' . ($error ?: 'unknown'));
-        return ['error' => $error ?: 'OpenAI request failed'];
+        return ['error' => 'OpenAI request failed: ' . ($error ?: 'unknown')];
     }
     if ($httpCode >= 400) {
         error_log('OpenAI generate HTTP ' . $httpCode . ' response: ' . $response);
-        return ['error' => 'OpenAI HTTP ' . $httpCode];
+        return ['error' => 'OpenAI error (HTTP ' . $httpCode . '): ' . substr($response, 0, 200)];
     }
     $data = json_decode($response, true);
     if (!isset($data['choices'][0]['message']['content'])) {
-        error_log('OpenAI generate missing content: ' . $response);
-        return ['error' => 'OpenAI response missing content', 'raw' => $data];
+        error_log('OpenAI generate missing content in response: ' . json_encode($data));
+        return ['error' => 'OpenAI response invalid or missing content'];
     }
     $html = $data['choices'][0]['message']['content'];
+    
+    // Strip markdown code blocks if present
+    $html = preg_replace('/^```html\s*/i', '', $html);
+    $html = preg_replace('/^```\s*/i', '', $html);
+    $html = preg_replace('/\s*```\s*$/i', '', $html);
+    $html = trim($html);
+    
+    // Strip OpenAI citation artifacts
     $html = preg_replace('/:contentReference\\[[^\\]]+\\]\\{[^\\}]+\\}/', '', $html);
+    
+    error_log('OpenAI HTML generated (first 200 chars): ' . substr($html, 0, 200));
+    
     return ['html' => $html];
+}
+
+function parse_density_range(string $range): array {
+    $range = str_replace('%', '', $range);
+    $parts = array_map('trim', explode('-', $range));
+    if (count($parts) === 2 && is_numeric($parts[0]) && is_numeric($parts[1])) {
+        return [(float) $parts[0], (float) $parts[1]];
+    }
+    if (is_numeric($range)) {
+        $value = (float) $range;
+        return [$value, $value];
+    }
+    return [0.0, 0.0];
 }
 
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
@@ -143,19 +167,68 @@ foreach ($secciones as $sec) {
     }
 }
 
-$prompt = "Genera un articulo HTML completo y profesional en espanol que cumpla TODAS las directrices del informe.\n";
-$prompt .= "Longitud total: " . ($rango !== '' ? $rango : $min) . " palabras (minimo " . $min . ").\n";
-if ($densLine !== '') {
-    $prompt .= "Densidades objetivo: " . $densLine . ".\n";
+// Extract density targets into structured format
+$densityTargets = [];
+foreach (($analysis['keywords_semanticas'] ?? []) as $item) {
+    $term = $item['term'] ?? '';
+    $dens = $item['densidad_recomendada'] ?? '';
+    if ($term !== '' && $dens !== '') {
+        $densityTargets[$term] = $dens;
+    }
 }
+
+$prompt = "======================== TAREA CRITICA: GENERAR CONTENIDO LARGO Y DENSIDADES PERFECTAS ========================\n\n";
+
+$prompt .= "⚠️ RESTRICTION #1 - LONGITUD:\n";
+$prompt .= "MINIMO " . $min . " palabras (total, contando solo parrafos)\n";
+$prompt .= "Estructura: Intro (150-200) + 4 secciones H2 (200-250 cada) + Conclusion (150-200) = " . $min . "+\n\n";
+
+$prompt .= "⚠️ RESTRICTION #2 - DENSIDADES EXACTAS Y BALANCEADAS:\n";
+$prompt .= "CADA PALABRA CLAVE DEBE TENER EXACTAMENTE ESTAS MENCIONES:\n";
+foreach ($densityTargets as $term => $densRange) {
+    [$minD, $maxD] = parse_density_range($densRange);
+    $minOcc = (int) floor(($minD / 100) * $min);
+    $maxOcc = (int) ceil(($maxD / 100) * $min);
+    $rangeMsg = $minOcc . "-" . $maxOcc;
+    $prompt .= "   \"" . $term . "\" (" . $densRange . "): use EXACTAMENTE " . $rangeMsg . " veces\n";
+}
+
+$prompt .= "\n🎯 ESTRATEGIA DE DISTRIBUCION (CRITICA):\n";
+$prompt .= "NO concentres palabras clave en pocas secciones. DISTRIBUYE:\n";
+foreach ($densityTargets as $term => $densRange) {
+    [$minD, $maxD] = parse_density_range($densRange);
+    $minOcc = (int) floor(($minD / 100) * $min);
+    $maxOcc = (int) ceil(($maxD / 100) * $min);
+    $rangeMsg = $minOcc . "-" . $maxOcc;
+    $prompt .= "   \"" . $term . "\": " . $rangeMsg . " menciones → Intro (0-1) + Sec1 (0-1) + Sec2 (0-1) + Sec3 (0-1) + Sec4 (0-1) + Conc (0-1)\n";
+}
+
+$prompt .= "\n✅ ESTRUCTURA HTML:\n";
 if ($h1 !== '') {
-    $prompt .= "H1: " . $h1 . ".\n";
+    $prompt .= "   <h1>" . $h1 . "</h1>\n";
 }
-if ($seccionLines) {
-    $prompt .= "Estructura H2/H3 y longitudes:\n- " . implode(\"\\n- \", $seccionLines) . \"\\n\";
-}
-$prompt .= "Keywords principales: " . $keywords . ".\n";
-$prompt .= "Devuelve SOLO HTML valido con titulos, parrafos y listas cuando corresponda. No incluyas explicaciones ni markdown.";
+$prompt .= "   <p>Intro: 150-200 palabras</p>\n";
+$prompt .= "   <h2>Seccion 1</h2>\n";
+$prompt .= "   <p>Parrafo 130-150 palabras</p>\n";
+$prompt .= "   <p>Parrafo 130-150 palabras</p>\n";
+$prompt .= "   <h2>Seccion 2</h2>\n";
+$prompt .= "   ...[REPETIR ESTRUCTURA]...\n";
+$prompt .= "   <p>Conclusion: 150-200 palabras</p>\n\n";
+
+$prompt .= "📌 REGLAS DE KEYWORDS:\n";
+$prompt .= "1. PRIMERA MENCION en cada sección: <strong>palabra clave</strong>\n";
+$prompt .= "2. NO repitas mas veces que se indica\n";
+$prompt .= "3. USA SINONIMOS en menciones posteriores (no siempre la misma frase)\n";
+$prompt .= "4. DISTRIBUYE EN DIFERENTES PARRAFOS (no todos en uno)\n";
+$prompt .= "5. Si necesitas mencionar en H2: incluye la palabra clave\n\n";
+
+$prompt .= "🚫 ERRORES CRITICOS:\n";
+$prompt .= "- Menos de " . $min . " palabras = INVALIDO\n";
+$prompt .= "- Una palabra clave con más menciones de lo especificado = INVALIDO\n";
+$prompt .= "- Todas las menciones de un keyword en 1 sección = INVALIDO\n";
+$prompt .= "- Markdown, explicaciones, HTML malformado = INVALIDO\n\n";
+
+$prompt .= "📤 DEVUELVE: SOLO HTML valido con " . $min . "+ palabras y densidades perfectas.\n";
 
 $ai = call_openai_html($config, $prompt);
 if (!empty($ai['error'])) {

@@ -27,3 +27,7 @@ Aplicacion web para analisis semantico SEO con TF-IDF, Serper y OpenAI.
 - Cache de analisis: 30 dias.
 - Cache de SERP: 7 dias.
 - Rate limit: 10 analisis por IP/24h.
+
+## Admin
+Los endpoints de soporte (`logs.php`, `debug.php`, `setup.php`, `test-openai.php`, `test-anthropic.php`, `clear-serp-cache.php`) requieren `admin.token`.
+Puedes pasar el token via header `X-Admin-Token` o parametro `?token=`.

@@ -1,7 +1,7 @@
 <?php
 return [
     'db' => [
-        'host' => '127.0.0.1',
+        'host' => 'localhost',
         'name' => 'semantica',
         'user' => 'semantica_user',
         'pass' => 'change_me',
@@ -18,16 +18,17 @@ return [
     'openai' => [
         'api_key' => 'YOUR_OPENAI_API_KEY',
         'model' => 'gpt-4.1',
-        'timeout' => 30
+        'timeout' => 90
     ],
     'anthropic' => [
         'api_key' => 'YOUR_ANTHROPIC_API_KEY',
         'model' => 'claude-sonnet-4-20250514',
-        'timeout' => 30,
-        'max_tokens' => 2048
+        'timeout' => 60,
+        'max_tokens' => 4096
     ],
     'llm' => [
-        'provider' => 'openai'
+        'analyzer_provider' => 'openai',
+        'generator_provider' => 'openai'
     ],
     'rate_limit' => [
         'daily_limit' => 10,
@@ -36,5 +37,8 @@ return [
     'scrape' => [
         'max_length' => 12000,
         'timeout' => 15
+    ],
+    'admin' => [
+        'token' => 'YOUR_ADMIN_TOKEN'
     ],
 ];

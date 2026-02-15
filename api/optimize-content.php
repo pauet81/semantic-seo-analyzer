@@ -83,7 +83,7 @@ function call_openai_optimize(array $config, string $prompt): array {
         'model' => $config['openai']['model'],
         'temperature' => 0.2,
         'messages' => [
-            ['role' => 'system', 'content' => 'Eres un experto en optimización SEO. Tu tarea es ajustar HTML para cumplir exactamente restricciones de longitud y densidades de keywords. Devuelves SOLO HTML valido, sin explicaciones, sin markdown. Sigue instrucciones al pie de la letra.'],
+            ['role' => 'system', 'content' => 'Eres un experto en optimización SEO. Tu tarea es ajustar HTML para cumplir exactamente restricciones de longitud y densidades de keywords. Devuelves SOLO HTML valido, sin explicaciones, sin markdown.'],
             ['role' => 'user', 'content' => $prompt]
         ]
     ];
@@ -97,7 +97,7 @@ function call_openai_optimize(array $config, string $prompt): array {
             'Authorization: Bearer ' . $config['openai']['api_key'],
         ],
         CURLOPT_POSTFIELDS => json_encode($payload),
-        CURLOPT_TIMEOUT => 120,
+        CURLOPT_TIMEOUT => 90,
     ]);
     $response = curl_exec($ch);
     $error = curl_error($ch);
@@ -178,42 +178,34 @@ $current = analyze_content_densities($html, $densityTargets);
 $current_words = $current['total_words'];
 $current_keywords = $current['keywords'];
 
-error_log('Adjust: Current words=' . $current_words . ', Target=' . $minWords);
+error_log('Optimize: Current words=' . $current_words . ', Target=' . $minWords);
 foreach ($current_keywords as $term => $data) {
     error_log('  ' . $term . ': ' . $data['current_density'] . '% (target ' . $data['target_min'] . '-' . $data['target_max'] . '%)');
 }
 
 // Build adjustment prompt
-$prompt = "Tu tarea: Optimiza este HTML para SEO cumpliendo EXACTAMENTE estos requisitos:\n\n";
-$prompt .= "REQUISITO #1 - LONGITUD:\n";
-$prompt .= "- El contenido DEBE tener " . $minWords . "+ palabras\n";
-$prompt .= "- Actualmente tiene " . $current_words . " palabras\n";
-if ($current_words < $minWords) {
-    $prompt .= "- ⚠️ FALTAN " . ($minWords - $current_words) . " palabras\n";
-    $prompt .= "- Expande parrafos, agrega detalles, ejemplos, explicaciones\n";
-}
-$prompt .= "\n";
+$prompt = "Optimiza este HTML para SEO. REQUISITOS OBLIGATORIOS:\n\n";
+$prompt .= "1. LONGITUD: Debe tener " . $minWords . "+ palabras (actualmente tiene " . $current_words . ")\n";
+$prompt .= "   - Si faltan palabras, expande con contenido relevante\n";
+$prompt .= "   - Agrando parrafos, agrega ejemplos, detalles\n\n";
 
-$prompt .= "REQUISITO #2 - DENSIDADES DE KEYWORDS (CRITICO):\n";
-$prompt .= "Cada palabra clave DEBE estar en estos rangos EXACTOS:\n";
+$prompt .= "2. DENSIDADES DE KEYWORDS - DEBEN ESTAR EN ESTOS RANGOS:\n";
 foreach ($current_keywords as $term => $data) {
     $target_range = $densityTargets[$term] ?? '';
-    $target_count = $data['target_occurrences'][0] . "-" . $data['target_occurrences'][1];
-    $prompt .= "  • \"" . $term . "\": " . $target_range . " (" . $target_count . " menciones en " . $minWords . " palabras)\n";
+    $prompt .= "   \"" . $term . "\": " . $target_range . " (" . $data['target_occurrences'][0] . "-" . $data['target_occurrences'][1] . " veces)\n";
     if (!$data['is_ok']) {
-        $prompt .= "    [FUERA DE RANGO] Actual: " . $data['current_density'] . "% (" . $data['occurrences'] . " veces)\n";
+        $prompt .= "      [FUERA DE RANGO] Actualmente: " . $data['current_density'] . "% (" . $data['occurrences'] . " veces)\n";
     }
 }
 
-$prompt .= "\nESTRATEGIA:\n";
-$prompt .= "1. Expande el contenido a " . $minWords . "+ palabras\n";
-$prompt .= "2. Distribuye las palabras clave balanceadamente\n";
-$prompt .= "3. Usa sinonimos para variar el texto (no repetir igual)\n";
-$prompt .= "4. Mantén formato HTML valido\n";
-$prompt .= "5. Primera mención de cada keyword en <strong></strong>\n";
-$prompt .= "6. Devuelve SOLO HTML, nada mas\n\n";
+$prompt .= "\n3. ESTRATEGIA DE AJUSTE:\n";
+$prompt .= "   - Expande contenido si faltan palabras\n";
+$prompt .= "   - Distribuye keywords balanceadamente en todo el articulo\n";
+$prompt .= "   - Usa sinonimos para variar el texto\n";
+$prompt .= "   - Mantén primera mención en <strong></strong>\n";
+$prompt .= "   - Devuelve SOLO HTML valido\n\n";
 
-$prompt .= "HTML a optimizar:\n" . $html;
+$prompt .= "HTML a optimizar:\n" . substr($html, 0, 1000) . "...\n";
 
 $optimized = call_openai_optimize($config, $prompt);
 if (!empty($optimized['error'])) {
@@ -232,5 +224,22 @@ foreach ($after['keywords'] as $term => $data) {
 
 json_response([
     'adjusted_html' => $optimized_html,
-    'message' => 'Contenido optimizado'
+    'before' => [
+        'words' => $current_words,
+        'target' => $minWords,
+        'densities' => array_map(fn($d) => [
+            'current' => $d['current_density'],
+            'target' => $d['target_min'] . '-' . $d['target_max'],
+            'ok' => $d['is_ok']
+        ], $current_keywords)
+    ],
+    'after' => [
+        'words' => $after['total_words'],
+        'target' => $minWords,
+        'densities' => array_map(fn($d) => [
+            'current' => $d['current_density'],
+            'target' => $d['target_min'] . '-' . $d['target_max'],
+            'ok' => $d['is_ok']
+        ], $after['keywords'])
+    ]
 ], 200);
