@@ -96,6 +96,157 @@ function parse_density_range(string $range): array {
     return [0.0, 0.0];
 }
 
+function extract_plain_text(string $html): string {
+    $html = preg_replace('/<script\\b[^>]*>(.*?)<\\/script>/is', ' ', $html);
+    $html = preg_replace('/<style\\b[^>]*>(.*?)<\\/style>/is', ' ', $html);
+    $text = strip_tags($html);
+    $text = html_entity_decode($text, ENT_QUOTES | ENT_HTML5, 'UTF-8');
+    $text = preg_replace('/\\s+/u', ' ', $text);
+    return trim($text);
+}
+
+function count_syllables(string $word): int {
+    $word = mb_strtolower($word, 'UTF-8');
+    $word = strtr($word, [
+        'á' => 'a',
+        'é' => 'e',
+        'í' => 'i',
+        'ó' => 'o',
+        'ú' => 'u',
+        'ü' => 'u',
+    ]);
+    if (mb_strlen($word) < 2) return 1;
+
+    $diptongos = ['ai', 'ei', 'oi', 'au', 'eu', 'ou', 'ia', 'ie', 'io', 'ua', 'ue', 'uo'];
+    $syllables = 0;
+    $previous_was_vowel = false;
+
+    for ($i = 0; $i < mb_strlen($word); $i++) {
+        $char = mb_substr($word, $i, 1);
+        $is_vowel = in_array($char, ['a', 'e', 'i', 'o', 'u'], true);
+        if ($is_vowel && !$previous_was_vowel) {
+            $next_chars = mb_substr($word, $i, 2);
+            if (!in_array($next_chars, $diptongos, true)) {
+                $syllables++;
+            }
+        }
+        $previous_was_vowel = $is_vowel;
+    }
+
+    return max(1, $syllables);
+}
+
+function count_total_syllables(string $text): int {
+    $words = preg_split('/\\s+/u', $text, -1, PREG_SPLIT_NO_EMPTY);
+    $total = 0;
+    foreach ($words as $word) {
+        $word = preg_replace('/[^a-záéíóúñü]/ui', '', $word);
+        if ($word !== '') {
+            $total += count_syllables($word);
+        }
+    }
+    return max(1, $total);
+}
+
+function calculate_flesch_readability(string $text): array {
+    $text = trim($text);
+    if ($text === '') {
+        return ['score' => 0.0];
+    }
+
+    $words = preg_split('/\\s+/u', $text, -1, PREG_SPLIT_NO_EMPTY);
+    $word_count = is_array($words) ? count($words) : 0;
+    if ($word_count === 0) {
+        return ['score' => 0.0];
+    }
+
+    $sentence_count = preg_match_all('/[.!?]+/u', $text);
+    if ($sentence_count === false || $sentence_count === 0) {
+        $sentence_count = 1;
+    }
+
+    $syllable_count = count_total_syllables($text);
+
+    $flesch_score = 206.835 - (1.015 * ($word_count / $sentence_count)) - (84.6 * ($syllable_count / $word_count));
+    $flesch_score = max(0, min(100, $flesch_score));
+
+    return ['score' => round($flesch_score, 1)];
+}
+
+function count_phrase_occurrences(array $tokens, array $phraseTokens): int {
+    $count = 0;
+    $len = count($phraseTokens);
+    if ($len === 0) {
+        return 0;
+    }
+    for ($i = 0; $i <= count($tokens) - $len; $i++) {
+        $match = true;
+        for ($j = 0; $j < $len; $j++) {
+            if ($tokens[$i + $j] !== $phraseTokens[$j]) {
+                $match = false;
+                break;
+            }
+        }
+        if ($match) {
+            $count++;
+        }
+    }
+    return $count;
+}
+
+function evaluate_generated_html(string $html, array $analysis): array {
+    $plain = extract_plain_text($html);
+    $normalized = sem_normalize_text($plain);
+    $tokensAll = preg_split('/\\s+/u', $normalized, -1, PREG_SPLIT_NO_EMPTY);
+    $wordCount = count($tokensAll);
+
+    $length = $analysis['longitud_texto'] ?? [];
+    $range = $length['rango_recomendado'] ?? '';
+    [$minRange, $maxRange] = parse_density_range($range);
+    $minCompetitive = (int) ($length['minima_competitiva'] ?? 0);
+    $minRequired = max(600, $minCompetitive, (int) $minRange);
+
+    $readability = calculate_flesch_readability($plain);
+    $readabilityOk = (($readability['score'] ?? 0) >= 70);
+
+    $termStats = [];
+    $allDensitiesOk = true;
+    foreach (($analysis['keywords_semanticas'] ?? []) as $item) {
+        $term = $item['term'] ?? '';
+        $densityRange = $item['densidad_recomendada'] ?? '';
+        if ($term === '' || $wordCount === 0) {
+            continue;
+        }
+        [$minD, $maxD] = parse_density_range($densityRange);
+        $termNormalized = sem_normalize_text($term);
+        $termTokens = preg_split('/\\s+/u', $termNormalized, -1, PREG_SPLIT_NO_EMPTY);
+        $occ = count_phrase_occurrences($tokensAll, $termTokens);
+        $density = ($occ / $wordCount) * 100;
+        $ok = ($minD > 0.0 || $maxD > 0.0) && ($density >= $minD && $density <= $maxD);
+        if (!$ok) {
+            $allDensitiesOk = false;
+        }
+        $termStats[] = [
+            'term' => $term,
+            'density' => round($density, 2),
+            'target' => $densityRange,
+            'ok' => $ok,
+            'occurrences' => $occ,
+        ];
+    }
+
+    $lengthOk = ($wordCount >= $minRequired) && (($maxRange <= 0) || ($wordCount <= (int) $maxRange));
+
+    return [
+        'ok' => ($lengthOk && $allDensitiesOk && $readabilityOk),
+        'word_count' => $wordCount,
+        'min_required' => $minRequired,
+        'max_recommended' => (int) $maxRange,
+        'readability_score' => $readability['score'] ?? 0,
+        'term_stats' => $termStats,
+    ];
+}
+
 $method = $_SERVER['REQUEST_METHOD'] ?? 'GET';
 if ($method !== 'POST') {
     error_log('generate-content: invalid method ' . $method);
@@ -136,6 +287,14 @@ $longitud = $analysis['longitud_texto'] ?? [];
 $rango = $longitud['rango_recomendado'] ?? '';
 $min = (int) ($longitud['minima_competitiva'] ?? 600);
 $min = max(600, $min);
+
+// Try to aim inside the recommended range when available (middle of the range).
+[$minRange, $maxRange] = parse_density_range($rango);
+$targetWords = $min;
+if ($minRange > 0 && $maxRange > 0 && $maxRange >= $minRange) {
+    $targetWords = (int) round(($minRange + $maxRange) / 2);
+    $targetWords = max($min, $targetWords);
+}
 
 $densidades = [];
 foreach (($analysis['keywords_semanticas'] ?? []) as $item) {
@@ -180,15 +339,15 @@ foreach (($analysis['keywords_semanticas'] ?? []) as $item) {
 $prompt = "======================== TAREA CRITICA: GENERAR CONTENIDO LARGO Y DENSIDADES PERFECTAS ========================\n\n";
 
 $prompt .= "⚠️ RESTRICTION #1 - LONGITUD:\n";
-$prompt .= "MINIMO " . $min . " palabras (total, contando solo parrafos)\n";
-$prompt .= "Estructura: Intro (150-200) + 4 secciones H2 (200-250 cada) + Conclusion (150-200) = " . $min . "+\n\n";
+$prompt .= "OBJETIVO " . $targetWords . " palabras (minimo " . $min . ")\n";
+$prompt .= "Estructura: Intro (150-220) + secciones H2/H3 segun el informe + Conclusion (150-220)\n\n";
 
 $prompt .= "⚠️ RESTRICTION #2 - DENSIDADES EXACTAS Y BALANCEADAS:\n";
 $prompt .= "CADA PALABRA CLAVE DEBE TENER EXACTAMENTE ESTAS MENCIONES:\n";
 foreach ($densityTargets as $term => $densRange) {
     [$minD, $maxD] = parse_density_range($densRange);
-    $minOcc = (int) floor(($minD / 100) * $min);
-    $maxOcc = (int) ceil(($maxD / 100) * $min);
+    $minOcc = (int) floor(($minD / 100) * $targetWords);
+    $maxOcc = (int) ceil(($maxD / 100) * $targetWords);
     $rangeMsg = $minOcc . "-" . $maxOcc;
     $prompt .= "   \"" . $term . "\" (" . $densRange . "): use EXACTAMENTE " . $rangeMsg . " veces\n";
 }
@@ -197,8 +356,8 @@ $prompt .= "\n🎯 ESTRATEGIA DE DISTRIBUCION (CRITICA):\n";
 $prompt .= "NO concentres palabras clave en pocas secciones. DISTRIBUYE:\n";
 foreach ($densityTargets as $term => $densRange) {
     [$minD, $maxD] = parse_density_range($densRange);
-    $minOcc = (int) floor(($minD / 100) * $min);
-    $maxOcc = (int) ceil(($maxD / 100) * $min);
+    $minOcc = (int) floor(($minD / 100) * $targetWords);
+    $maxOcc = (int) ceil(($maxD / 100) * $targetWords);
     $rangeMsg = $minOcc . "-" . $maxOcc;
     $prompt .= "   \"" . $term . "\": " . $rangeMsg . " menciones → Intro (0-1) + Sec1 (0-1) + Sec2 (0-1) + Sec3 (0-1) + Sec4 (0-1) + Conc (0-1)\n";
 }
@@ -224,6 +383,7 @@ $prompt .= "5. Si necesitas mencionar en H2: incluye la palabra clave\n\n";
 
 $prompt .= "🚫 ERRORES CRITICOS:\n";
 $prompt .= "- Menos de " . $min . " palabras = INVALIDO\n";
+$prompt .= "- Legibilidad < 70 Flesch = INVALIDO (escribe mas claro)\n";
 $prompt .= "- Una palabra clave con más menciones de lo especificado = INVALIDO\n";
 $prompt .= "- Todas las menciones de un keyword en 1 sección = INVALIDO\n";
 $prompt .= "- Markdown, explicaciones, HTML malformado = INVALIDO\n\n";
@@ -235,4 +395,41 @@ if (!empty($ai['error'])) {
     json_response(['error' => $ai['error']], 500);
 }
 
-json_response(['html' => $ai['html'] ?? '']);
+$htmlOut = $ai['html'] ?? '';
+$evaluation = evaluate_generated_html($htmlOut, $analysis);
+
+// One self-repair pass if output doesn't meet the report constraints.
+if (!$evaluation['ok']) {
+    $issues = [];
+    if (($evaluation['word_count'] ?? 0) < ($evaluation['min_required'] ?? 0)) {
+        $issues[] = 'Faltan palabras: ' . ($evaluation['word_count'] ?? 0) . ' (min ' . ($evaluation['min_required'] ?? 0) . ')';
+    }
+    if (($evaluation['readability_score'] ?? 0) < 70) {
+        $issues[] = 'Legibilidad Flesch ' . ($evaluation['readability_score'] ?? 0) . ' (objetivo 70+)';
+    }
+    foreach (($evaluation['term_stats'] ?? []) as $stat) {
+        if (!($stat['ok'] ?? false)) {
+            $issues[] = 'Densidad "' . ($stat['term'] ?? '') . '" ' . ($stat['density'] ?? 0) . '% (objetivo ' . ($stat['target'] ?? '') . ')';
+        }
+    }
+
+    $repairPrompt = "Corrige el siguiente HTML para cumplir EXACTAMENTE el informe SEO.\n\n";
+    $repairPrompt .= "Requisitos obligatorios:\n";
+    $repairPrompt .= "- Longitud: minimo " . $min . " palabras (objetivo " . $targetWords . ")\n";
+    $repairPrompt .= "- Densidades: respetar rangos para cada keyword\n";
+    $repairPrompt .= "- Legibilidad: Flesch 70+ (oraciones cortas, listas si ayuda)\n";
+    $repairPrompt .= "- Devuelve SOLO HTML valido\n\n";
+    $repairPrompt .= "Problemas detectados:\n- " . implode("\n- ", $issues) . "\n\n";
+    $repairPrompt .= "HTML a corregir:\n" . $htmlOut;
+
+    $fixed = call_openai_html($config, $repairPrompt);
+    if (empty($fixed['error']) && !empty($fixed['html'])) {
+        $htmlOut = $fixed['html'];
+        $evaluation = evaluate_generated_html($htmlOut, $analysis);
+    }
+}
+
+json_response([
+    'html' => $htmlOut,
+    'evaluation' => $evaluation,
+]);

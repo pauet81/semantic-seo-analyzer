@@ -1,4 +1,4 @@
-﻿const form = document.getElementById('keywordForm');
+const form = document.getElementById('keywordForm');
 const input = document.getElementById('keywords');
 const spinner = document.getElementById('spinnerOverlay');
 const resultsContent = document.getElementById('resultsContent');
@@ -163,12 +163,12 @@ const renderContentGenerator = () => `
     <div class="checker-actions">
       <button type="button" class="button-secondary" data-content="adjust">Ajustar contenido</button>
     </div>
-    <textarea class="prompt-box" data-content="input" rows="12" placeholder="AquÃ­ aparecerÃ¡ el HTML generado"></textarea>
+    <textarea class="prompt-box" data-content="input" rows="12" placeholder="Aqui aparecera el HTML generado"></textarea>
     <div class="checker-preview" data-content="preview">
       <p>Vista previa del HTML.</p>
     </div>
     <div class="checker-result" data-content="result">
-      <p>Genera el contenido para ver el anÃ¡lisis de cumplimiento.</p>
+      <p>Genera el contenido para ver el analisis de cumplimiento.</p>
     </div>
   </div>
 `;

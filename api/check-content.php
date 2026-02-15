@@ -31,6 +31,15 @@ function extract_plain_text(string $html): string {
 
 function count_syllables(string $word): int {
     $word = mb_strtolower($word, 'UTF-8');
+    // Normalize Spanish vowels so accented chars count as vowels.
+    $word = strtr($word, [
+        'á' => 'a',
+        'é' => 'e',
+        'í' => 'i',
+        'ó' => 'o',
+        'ú' => 'u',
+        'ü' => 'u',
+    ]);
     if (mb_strlen($word) < 2) return 1;
     
     // Diptongos y triptongos en español
@@ -85,6 +94,9 @@ function calculate_flesch_readability(string $text): array {
     
     // Contar oraciones (., !, ?)
     $sentence_count = preg_match_all('/[.!?]+/u', $text);
+    if ($sentence_count === false) {
+        $sentence_count = 1;
+    }
     if ($sentence_count === 0) $sentence_count = 1;
     
     // Contar sílabas
@@ -245,11 +257,21 @@ foreach (($analysis['keywords_semanticas'] ?? []) as $item) {
 }
 
 $avgTermScore = $termScores ? array_sum($termScores) / count($termScores) : 0.0;
-$score = (0.6 * $avgTermScore + 0.4 * $lengthScore) * 100;
-$score = max(0, min(100, $score));
 
 // Calculate readability (Flesch)
 $readability = calculate_flesch_readability($plain);
+$readabilityScore = 0.0;
+if (($readability['score'] ?? 0) >= 70) {
+    $readabilityScore = 1.0;
+} elseif (($readability['score'] ?? 0) >= 60) {
+    $readabilityScore = 0.8;
+} elseif (($readability['score'] ?? 0) > 0) {
+    $readabilityScore = 0.4;
+}
+
+// Total score: density (40%) + length (40%) + readability (20%)
+$score = (0.4 * $avgTermScore + 0.4 * $lengthScore + 0.2 * $readabilityScore) * 100;
+$score = max(0, min(100, $score));
 
 $insights = [];
 if ($wordCount < $minRequired) {
@@ -260,10 +282,10 @@ foreach ($termStats as $stat) {
         $insights[] = 'Ajusta la densidad de "' . $stat['term'] . '" a ' . $stat['target'] . ' (actual ' . $stat['density'] . '%).';
     }
 }
-if ($readability['score'] < 60) {
-    $insights[] = 'Legibilidad baja (' . $readability['score'] . ' Flesch). Simplifica oraciones y usa vocabulario más común.';
-} elseif ($readability['score'] > 85) {
-    $insights[] = 'Legibilidad muy alta (' . $readability['score'] . ' Flesch). Considera agregar más profundidad técnica si es necesario.';
+if (($readability['score'] ?? 0) < 60) {
+    $insights[] = 'Legibilidad baja (' . ($readability['score'] ?? 0) . ' Flesch). Simplifica oraciones, usa listas y frases mas cortas.';
+} elseif (($readability['score'] ?? 0) < 70) {
+    $insights[] = 'Legibilidad mejorable (' . ($readability['score'] ?? 0) . ' Flesch). Apunta a 70+ para una lectura mas fluida.';
 }
 if (!$insights) {
     $insights[] = 'El contenido cumple longitud, densidades y legibilidad.';
