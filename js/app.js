@@ -161,14 +161,16 @@ const renderSources = (payload) => {
 const renderContentGenerator = () => `
   <div class="checker-grid">
     <div class="checker-actions">
+      <button type="button" class="button-secondary" data-content="prompt">Generar prompt</button>
+      <button type="button" class="button-secondary" data-content="copy">Copiar</button>
       <button type="button" class="button-secondary" data-content="adjust">Ajustar contenido</button>
     </div>
-    <textarea class="prompt-box" data-content="input" rows="12" placeholder="Aqui aparecera el HTML generado"></textarea>
+    <textarea class="prompt-box" data-content="input" rows="12" placeholder="Aqui aparecera el prompt o el HTML"></textarea>
     <div class="checker-preview" data-content="preview">
       <p>Vista previa del HTML.</p>
     </div>
     <div class="checker-result" data-content="result">
-      <p>Genera el contenido para ver el analisis de cumplimiento.</p>
+      <p>Genera el prompt y pega el HTML final para evaluar el cumplimiento.</p>
     </div>
   </div>
 `;
@@ -335,6 +337,8 @@ const renderResults = (payload) => {
   contentInput = resultsContent.querySelector('[data-content="input"]');
   contentResult = resultsContent.querySelector('[data-content="result"]');
   contentPreview = resultsContent.querySelector('[data-content="preview"]');
+  const promptBtn = resultsContent.querySelector('[data-content="prompt"]');
+  const copyBtn = resultsContent.querySelector('[data-content="copy"]');
   const adjustBtn = resultsContent.querySelector('[data-content="adjust"]');
   const updatePreview = () => {
     if (!contentPreview) return;
@@ -355,6 +359,10 @@ const renderResults = (payload) => {
       contentResult.innerHTML = '<p>Introduce HTML para evaluar.</p>';
       return;
     }
+    if (!html.includes('<')) {
+      contentResult.innerHTML = '<p>El contenido no parece HTML. Pega el HTML final antes de evaluar.</p>';
+      return;
+    }
     const response = await fetch('/api/check-content.php', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -363,7 +371,7 @@ const renderResults = (payload) => {
     const payload = await response.json();
     renderCheckerResult(payload);
   };
-  const generateContent = async () => {
+  const generatePrompt = async () => {
     if (!currentReportHash) {
       contentResult.innerHTML = '<p>Selecciona un informe primero.</p>';
       return;
@@ -377,24 +385,41 @@ const renderResults = (payload) => {
       });
       if (!response.ok) {
         const text = await response.text();
-        contentResult.innerHTML = `<p><strong>Error:</strong> ${text || 'No se pudo generar.'}</p>`;
+        contentResult.innerHTML = `<p><strong>Error:</strong> ${text || 'No se pudo generar el prompt.'}</p>`;
         return;
       }
       const payload = await response.json();
-      if (payload.html) {
-        contentInput.value = payload.html;
+      if (payload.prompt) {
+        contentInput.value = payload.prompt;
         updatePreview();
-        await evaluateContent();
+        contentResult.innerHTML = '<p>Prompt generado. Pegalo en tu IA y vuelve con el HTML final para evaluar.</p>';
       } else {
-        contentResult.innerHTML = `<p><strong>Error:</strong> ${payload.error || 'No se pudo generar.'}</p>`;
+        contentResult.innerHTML = `<p><strong>Error:</strong> ${payload.error || 'No se pudo generar el prompt.'}</p>`;
       }
     } catch (error) {
-      contentResult.innerHTML = '<p>No se pudo generar el contenido.</p>';
+      contentResult.innerHTML = '<p>No se pudo generar el prompt.</p>';
     } finally {
       showSpinner(false);
     }
   };
-  generateContent();
+  if (promptBtn) {
+    promptBtn.addEventListener('click', generatePrompt);
+  }
+  if (copyBtn) {
+    copyBtn.addEventListener('click', async () => {
+      const text = (contentInput?.value || '').trim();
+      if (!text) {
+        contentResult.innerHTML = '<p>No hay nada para copiar.</p>';
+        return;
+      }
+      try {
+        await navigator.clipboard.writeText(text);
+        contentResult.innerHTML = '<p>Copiado al portapapeles.</p>';
+      } catch (error) {
+        contentResult.innerHTML = '<p>No se pudo copiar.</p>';
+      }
+    });
+  }
   if (adjustBtn) {
     adjustBtn.addEventListener('click', async () => {
       if (!currentReportHash) {
