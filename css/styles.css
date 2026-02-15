@@ -310,6 +310,45 @@ h1 {
   font-size: 0.85rem;
 }
 
+mark {
+  background: rgba(244, 180, 26, 0.55);
+  color: inherit;
+  padding: 0 2px;
+  border-radius: 4px;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.extract-list {
+  list-style: none;
+  padding: 0;
+  margin: 10px 0 0;
+  display: grid;
+  gap: 14px;
+}
+
+.extract-item {
+  border: 1px solid rgba(17, 25, 40, 0.08);
+  border-radius: 12px;
+  padding: 12px 14px;
+  background: rgba(255, 255, 255, 0.7);
+}
+
+.extract-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.extract-excerpt {
+  margin-top: 8px;
+  line-height: 1.5;
+  color: var(--muted);
+}
+
 .spinner-overlay {
   position: fixed;
   inset: 0;

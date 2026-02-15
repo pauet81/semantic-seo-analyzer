@@ -77,7 +77,7 @@ function fetch_serpapi(string $keyword, array $config): array {
         'q' => $keyword,
         'hl' => 'es',
         'gl' => 'es',
-        'num' => 20,
+        'num' => 10,
         'api_key' => $config['serpapi']['api_key'] ?? '',
     ]);
     $url = $baseUrl . '?' . $query;
@@ -171,6 +171,10 @@ function documents_from_serp(array $serpResults, int $maxLength, int $limitPerKe
 }
 
 function scrape_urls(array $urls, int $timeout, int $maxLength, array $urlKeywordMap = []): array {
+    return scrape_urls_with_failures($urls, $timeout, $maxLength, $urlKeywordMap)['documents'];
+}
+
+function scrape_urls_with_failures(array $urls, int $timeout, int $maxLength, array $urlKeywordMap = []): array {
     $multi = curl_multi_init();
     $handles = [];
     foreach ($urls as $url) {
@@ -197,6 +201,7 @@ function scrape_urls(array $urls, int $timeout, int $maxLength, array $urlKeywor
     } while ($active && $status === CURLM_OK);
 
     $documents = [];
+    $failures = [];
     foreach ($handles as $meta) {
         $ch = $meta['handle'];
         $html = curl_multi_getcontent($ch);
@@ -208,6 +213,7 @@ function scrape_urls(array $urls, int $timeout, int $maxLength, array $urlKeywor
         if ($error || !$html || $code >= 400) {
             $reason = $error ?: 'HTTP ' . $code;
             error_log('Scrape failed: ' . $meta['url'] . ' - ' . $reason);
+            $failures[] = ['url' => $meta['url'], 'reason' => $reason];
             continue;
         }
         $title = '';
@@ -229,7 +235,7 @@ function scrape_urls(array $urls, int $timeout, int $maxLength, array $urlKeywor
     }
 
     curl_multi_close($multi);
-    return $documents;
+    return ['documents' => $documents, 'failures' => $failures];
 }
 
 function doc_top_terms(string $content, int $limit = 6): array {
@@ -268,13 +274,55 @@ function count_words(string $text): int {
     return count(array_filter($parts));
 }
 
+function excerpt_text(string $text, int $maxChars = 800): string {
+    $text = preg_replace('/\s+/u', ' ', trim($text));
+    if ($text === '') {
+        return '';
+    }
+    if (mb_strlen($text, 'UTF-8') <= $maxChars) {
+        return $text;
+    }
+    return mb_substr($text, 0, $maxChars, 'UTF-8') . '...';
+}
+
+function tfidf_match_terms(string $content, array $tfidfTerms, int $limit = 12): array {
+    $normalized = sem_normalize_text($content);
+    if ($normalized === '') {
+        return [];
+    }
+    $tokens = preg_split('/\s+/u', $normalized, -1, PREG_SPLIT_NO_EMPTY);
+    $set = [];
+    foreach ($tokens as $t) {
+        $set[$t] = true;
+    }
+    $matches = [];
+    foreach ($tfidfTerms as $row) {
+        $term = $row['term'] ?? '';
+        if ($term === '') {
+            continue;
+        }
+        if (isset($set[$term])) {
+            $matches[] = $term;
+        }
+        if (count($matches) >= $limit) {
+            break;
+        }
+    }
+    return $matches;
+}
+
 function build_prompt(array $keywords, array $documents, array $tfidf, array $serpResults, array $stats): string {
+    $limits = $GLOBALS['config']['prompt_limits'] ?? [];
+    $maxDocs = (int) ($limits['max_documents'] ?? 12);
+    $maxExcerpt = (int) ($limits['max_excerpt_chars'] ?? 1200);
+    $maxTfidf = (int) ($limits['max_tfidf_terms'] ?? 30);
+
     $docsPayload = [];
-    foreach ($documents as $doc) {
+    foreach (array_slice($documents, 0, $maxDocs) as $doc) {
         $docsPayload[] = [
             'url' => $doc['url'],
             'title' => $doc['title'],
-            'content_excerpt' => $doc['content']
+            'content_excerpt' => excerpt_text($doc['content'], $maxExcerpt)
         ];
     }
 
@@ -282,7 +330,7 @@ function build_prompt(array $keywords, array $documents, array $tfidf, array $se
         'keywords' => $keywords,
         'serp' => $serpResults,
         'documents' => $docsPayload,
-        'tfidf_terms' => $tfidf['terms'],
+        'tfidf_terms' => array_slice($tfidf['terms'] ?? [], 0, $maxTfidf),
         'cooccurrences' => $tfidf['cooccurrences'],
         'word_stats' => $stats,
     ];
@@ -575,14 +623,18 @@ $urls = array_values(array_filter($urls, function (string $url) use ($blockHostS
     }
     return true;
 }));
-$urls = array_slice($urls, 0, 60);
+$maxUrls = (int) ($config['scrape']['max_urls'] ?? 30);
+$urls = array_slice($urls, 0, max(10, $maxUrls));
 
 $fallbackMode = null;
-$documents = scrape_urls($urls, (int) $config['scrape']['timeout'], (int) $config['scrape']['max_length'], $urlKeywordMap);
+$scrapeResult = scrape_urls_with_failures($urls, (int) $config['scrape']['timeout'], (int) $config['scrape']['max_length'], $urlKeywordMap);
+$documents = $scrapeResult['documents'];
+$scrapeFailures = $scrapeResult['failures'];
 if (!$documents) {
     error_log('No documents scraped. URLs count: ' . count($urls) . '. Using SERP snippets fallback.');
     $fallbackMode = 'serp_snippets';
     $documents = documents_from_serp($serpResults, (int) $config['scrape']['max_length'], 5, $blockedUrls);
+    $scrapeFailures = $scrapeFailures ?: [];
 }
 if (!$documents) {
     error_log('No documents from SERP snippets. Using keywords fallback.');
@@ -723,6 +775,7 @@ json_response([
     'tfidf' => $tfidf,
     'stats' => $stats,
     'fallback_mode' => $fallbackMode,
+    'scrape_failures' => $scrapeFailures,
     'usage' => [
         'llm_provider' => $analyzerProvider,
         'serpapi_calls' => $serpApiCalls,
@@ -748,6 +801,19 @@ json_response([
             'word_count' => $wordCount,
             'top_terms' => doc_top_terms($content, 6),
             'tone' => doc_tone($content)
+        ];
+    }, $documents)
+    ,
+    'extraction_log' => array_map(function ($doc) use ($tfidf) {
+        $content = $doc['content'] ?? '';
+        return [
+            'url' => $doc['url'] ?? '',
+            'title' => $doc['title'] ?? '',
+            'keyword' => $doc['keyword'] ?? '',
+            'source_type' => $doc['source_type'] ?? 'scraped',
+            'word_count' => $content !== '' ? count_words($content) : 0,
+            'excerpt' => excerpt_text($content, 900),
+            'tfidf_matches' => tfidf_match_terms($content, $tfidf['terms'] ?? [], 12),
         ];
     }, $documents)
 ]);

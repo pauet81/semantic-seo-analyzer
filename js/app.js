@@ -238,6 +238,72 @@ const renderUsage = (payload) => {
   `;
 };
 
+const escapeHtml = (value) => String(value || '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/\"/g, '&quot;')
+  .replace(/'/g, '&#039;');
+
+const highlightText = (text, terms) => {
+  const safe = escapeHtml(text);
+  const cleanedTerms = (terms || [])
+    .map((t) => String(t || '').trim())
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length)
+    .slice(0, 30);
+
+  if (!cleanedTerms.length) return safe;
+
+  let out = safe;
+  cleanedTerms.forEach((term) => {
+    // Escape regex, then do a simple case-insensitive replace.
+    const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    out = out.replace(new RegExp(`(${escaped})`, 'gi'), '<mark>$1</mark>');
+  });
+  return out;
+};
+
+const renderExtractionLog = (payload) => {
+  const items = payload?.extraction_log || [];
+  if (!items.length) return '<p>-</p>';
+
+  const keywords = payload?.keywords || [];
+  const tfidfTerms = (payload?.tfidf?.terms || []).slice(0, 15).map((t) => t.term).filter(Boolean);
+  const highlightTerms = [...keywords, ...tfidfTerms];
+
+  const rows = items.map((item) => {
+    const url = item.url || '';
+    const title = item.title || url || 'Sin titulo';
+    const header = url
+      ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(title)}</a>`
+      : `${escapeHtml(title)}`;
+
+    const excerpt = highlightText(item.excerpt || '', highlightTerms);
+    const matches = Array.isArray(item.tfidf_matches) && item.tfidf_matches.length
+      ? item.tfidf_matches.map((t) => `<span class="badge-pill">${escapeHtml(t)}</span>`).join('')
+      : '<span class="muted">-</span>';
+
+    return `
+      <li class="extract-item">
+        <div class="extract-head">
+          <div>${header}</div>
+          <div class="muted">${escapeHtml(item.source_type || '-')} · ${formatNumber(item.word_count || 0)} palabras</div>
+        </div>
+        <div class="extract-excerpt">${excerpt}</div>
+        <div class="badges">${matches}</div>
+      </li>
+    `;
+  }).join('');
+
+  const failures = payload?.scrape_failures || [];
+  const failureBlock = failures.length
+    ? `<details style="margin-top:10px;"><summary><strong>Scrapes fallidos</strong> (${failures.length})</summary><ul>${failures.map((f) => `<li>${escapeHtml(f.url)} - ${escapeHtml(f.reason)}</li>`).join('')}</ul></details>`
+    : '';
+
+  return `<p class="muted">Resalta keywords introducidas + top TF-IDF (15).</p><ul class="extract-list">${rows}</ul>${failureBlock}`;
+};
+
 const renderResults = (payload) => {
   resultsContent.innerHTML = '';
   resultsPlaceholder.style.display = 'none';
@@ -264,6 +330,7 @@ const renderResults = (payload) => {
   resultsContent.appendChild(createCard('7. Fuentes analizadas', '', renderSources(payload), false));
   resultsContent.appendChild(createCard('8. Contenido generado', '', renderContentGenerator(), true));
   resultsContent.appendChild(createCard('9. Consumo APIs', '', renderUsage(payload), false));
+  resultsContent.appendChild(createCard('10. Verificacion de extraccion', '', renderExtractionLog(payload), false));
 
   contentInput = resultsContent.querySelector('[data-content="input"]');
   contentResult = resultsContent.querySelector('[data-content="result"]');

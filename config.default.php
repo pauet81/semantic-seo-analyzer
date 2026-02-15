@@ -17,7 +17,7 @@ return [
     ],
     'openai' => [
         'api_key' => 'YOUR_OPENAI_API_KEY',
-        'model' => 'gpt-4.1',
+        'model' => 'gpt-4.1-mini',
         'timeout' => 90
     ],
     'anthropic' => [
@@ -35,8 +35,14 @@ return [
         'interval_hours' => 24
     ],
     'scrape' => [
-        'max_length' => 12000,
-        'timeout' => 15
+        'max_length' => 2000,
+        'timeout' => 15,
+        'max_urls' => 30
+    ],
+    'prompt_limits' => [
+        'max_documents' => 12,
+        'max_excerpt_chars' => 1200,
+        'max_tfidf_terms' => 30
     ],
     'admin' => [
         'token' => 'YOUR_ADMIN_TOKEN'
